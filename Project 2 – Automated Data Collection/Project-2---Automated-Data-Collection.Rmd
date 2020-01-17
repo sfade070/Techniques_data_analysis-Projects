@@ -1,0 +1,561 @@
+---
+title: "Project 2 – Automated Data Collection"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Soufiane Fadel (5314E)
+
+
+<a name="top"></a>
+
+
+# Introduction 
+
+In this project, we are collecting data from various online sources in order to build a collection of 5 text corpora, each one consisting of documents written in a different languages: 
+
+* *English* : collected from the United Kingdom’s Government website.
+* *French* :  collected from Wikipedia.
+* *Spanish* : collected from twitter.
+* *Italian* : collected from the PDF document  'Giovannino Guareschi’s Tutto don Camillo'.
+* *Germany* : collected from the n-tv German free-to-air television news channel.
+
+Our Goal is to automate the task of scrapping this text corpora in one peace of code in order to produce one final dataset that consist of all of the observations (text) placed in rows andeach row associated with a specific language code (“Eng”, “Fra”, “Esp”, “Ita”, “Ger”).
+
+To do so we need to proceed according to workflow with following parts: 
+
+
+
+* <a href="#S1"> **Loading R libraries** </a>
+
+* <a href="#S2"> **English Text** </a>
+  * <a href="#S22"> *Codes of English  text* </a>
+  * <a href="#S23"> *Testing the English text Result* </a>
+  
+* <a href="#S3"> **French Text** </a>
+  * <a href="#S32"> *Codes of French  text* </a>
+  * <a href="#S33"> *Testing the French text Result* </a>
+  
+* <a href="#S4"> **Spanish Text** </a>
+  * <a href="#S42"> *Codes of Spanish  text* </a>
+  * <a href="#S43"> *Testing the Spanish text Result* </a>
+
+* <a href="#S5"> **Italien Text** </a>
+  * <a href="#S52"> *Codes of Italien  text* </a>
+  * <a href="#S53"> *Testing the Italien text Result* </a>
+  
+* <a href="#S6"> **German Text** </a>
+  * <a href="#S62"> *Codes of German  text* </a>
+  * <a href="#S63"> *Testing the German text Result* </a>
+
+* <a href="#S7"> **The final dataset of 5 text corpora** </a>
+  
+
+
+
+<a name="S1"></a>
+
+# Loading R libraries
+```{r}
+library(bitops)
+library(RCurl)       
+library(XML)        
+library(stringr) 
+library(stringi)
+library(rvest)
+library(magrittr)
+library(xml2)
+library(curl)
+library(twitteR)
+library(purrr)
+library(tidytext)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(scales)
+library(broom)
+library(pdftools)
+
+```
+
+
+
+
+<a name="S2"></a>
+
+# English Text 
+
+
+
+We are scrapping all the UK Government press releases from “News and Communications” page (https://www.gov.uk/)   published in 2018 (from Jan 1, 2018 to Dec 31, 2018). 
+The first step is to  capture the URLs of all the required press releases and then download the press releases to a local folder in order extract the main text of each press release and save it to a string.
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+<a name="S22"></a>
+
+### Codes of English  text 
+
+```{r}
+
+ENG_TEXT <- function() {
+
+signatures = system.file("CurlSSL", cainfo = "cacert.pem", package = "RCurl")
+all_sub_links_articles <- character()    # initialize
+sub_link_page <- 'search/news-and-communications?public_timestamp%5Bfrom%5D=01%2F01%2F2018&public_timestamp%5Bto%5D=01%2F01%2F2019&order=updated-newest'
+count <- 0
+while( length(sub_link_page)>0  ){
+  full_link_page <- str_c("https://www.gov.uk/", sub_link_page)
+  html_page <- getURL(full_link_page, cainfo = signatures) 
+  html_page_tree <- htmlParse(html_page)
+  sub_links_of_articles = xpathSApply(html_page_tree, "//li[@class='gem-c-document-list__item  ']//a", xmlGetAttr, "href")
+  all_sub_links_articles <- c(all_sub_links_articles,sub_links_of_articles)
+  sub_link_page <- xpathSApply(html_page_tree,  "//li[@class= 'gem-c-pagination__item gem-c-pagination__item--next']//a", xmlGetAttr,"href")
+  count <- count +1
+}
+
+# Download all press releases in a the Folder 'Press_Releases_Eng' that you need to create before. 
+dir.create("Press_Releases_Eng")
+for(i in 1:length(all_sub_links_articles)){
+    url <- str_c("https://www.gov.uk", all_sub_links_articles[i])     # visit URL i 
+    tmp <- getURL(url, cainfo = signatures)              # get the HTML at URL i
+    write(tmp, str_c("Press_Releases_Eng/", i, ".html"))     # write HTML to Press_Releases/i.html
+}
+
+Eng_text <- character()   
+
+for(i in 1:length(list.files("Press_Releases_Eng")) ){
+  tmp <- readLines(str_c("Press_Releases_Eng/", i, ".html"))
+  tmp <- str_c(tmp, collapse = "")
+  tmp <- htmlParse(tmp)
+  release <- xpathSApply(tmp, "//div[@class='govspeak']", xmlValue)
+  Eng_text <- c(Eng_text,release)
+}
+
+
+return(c(count,Eng_text))
+}
+
+Eng <- ENG_TEXT()
+```
+
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+<a name="S23"></a>
+
+### Testing the English text Result 
+```{r}
+
+number_of_articles <- length(Eng[2:length(Eng)])
+number_of_pages <- Eng[1]
+sample_of_Eng_text <-  Eng[3:4]  
+
+cat("> the total number of articles is : ", number_of_articles, '\n','\n','\n') 
+
+cat("> the total number of pages containing articles is : ",number_of_pages,'\n','\n','\n')
+
+cat("> Here is some samples from the English text : ", '\n','\n',sample_of_Eng_text)
+
+
+
+
+```
+
+
+
+
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S3"></a>
+
+# French Text 
+
+
+Here we are  scrapping the Actrices françaises page on (French Wikipedia): https://fr.wikipedia.org/wiki/Cat%C3%A9gorie:Actrice_fran%C3%A7aise . We will identify and  capture the URLs which yields French actresses whose family name (or last name) starts with an “L” an “M”  and then we will extract the main text of each entry and save it to a string.
+
+
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S32"></a>
+
+### Codes of French  text 
+
+
+```{r}
+Fr_TEXT <- function(){
+
+signatures = system.file("CurlSSL", cainfo = "cacert.pem", package = "RCurl")
+
+
+
+url_1 <- 'https://fr.wikipedia.org/w/index.php?title=Cat%C3%A9gorie:Actrice_fran%C3%A7aise&from=L'
+html_page <- getURL(url_1, cainfo = signatures) 
+html_page_tree <- htmlParse(html_page)
+sub_links_of_actress_1 = xpathSApply(html_page_tree, "//div[@id='mw-pages']//div[@class='mw-category-group']//ul//li//a", xmlGetAttr, "href")
+
+url_2 <- 'https://fr.wikipedia.org/w/index.php?title=Cat%C3%A9gorie:Actrice_fran%C3%A7aise&subcatfrom=L&filefrom=L&pagefrom=Lesache%2C+Bernadette%0ABernadette+Le+Sach%C3%A9#mw-pages'
+html_page <- getURL(url_2, cainfo = signatures) 
+html_page_tree <- htmlParse(html_page)
+sub_links_of_actress_2 = xpathSApply(html_page_tree,'/html/body/div[3]/div[3]/div[4]/div[2]/div[2]/div[2]/div/div[1]/ul/li/a', xmlGetAttr, "href")
+
+url_3 <- 'https://fr.wikipedia.org/w/index.php?title=Cat%C3%A9gorie:Actrice_fran%C3%A7aise&from=M' 
+html_page <- getURL(url_3, cainfo = signatures) 
+html_page_tree <- htmlParse(html_page)
+sub_links_of_actress_3 = xpathSApply(html_page_tree, "//div[@id='mw-pages']//div[@class='mw-category-group']//ul//li//a", xmlGetAttr, "href")
+
+url_4 <- 'https://fr.wikipedia.org/w/index.php?title=Cat%C3%A9gorie:Actrice_fran%C3%A7aise&pagefrom=Meurisse%2C+Nina%0ANina+Meurisse&subcatfrom=M&filefrom=M#mw-pages' 
+html_page <- getURL(url_4, cainfo = signatures) 
+html_page_tree <- htmlParse(html_page)
+sub_links_of_actress_4 = xpathSApply(html_page_tree,'/html/body/div[3]/div[3]/div[4]/div[2]/div[2]/div[2]/div/div[1]/ul/li/a', xmlGetAttr, "href")
+
+sub_links_of_actress <- c(sub_links_of_actress_1,sub_links_of_actress_2,sub_links_of_actress_3,sub_links_of_actress_4)
+
+
+
+# Download all press releases
+dir.create("Press_Releases_Fr")
+for(i in 1:length(sub_links_of_actress)){
+    url <- str_c("https://fr.wikipedia.org", sub_links_of_actress[[i]])     # visit URL i 
+    tmp <- getURL(url, cainfo = signatures)              # get the HTML at URL i
+    write(tmp, str_c("Press_Releases_Fr/", i, ".html"))     # write HTML to Press_Releases/i.html
+}
+
+
+Fr_text <- character()   
+for(i in 1:length(list.files("Press_Releases_Fr")) ){
+  tmp <- readLines(str_c("Press_Releases_Fr/", i, ".html"))
+  tmp <- str_c(tmp, collapse = "")
+  tmp <- htmlParse(tmp)
+  release <- xpathSApply(tmp, "//div[@class='mw-parser-output']//p", xmlValue)
+  release <- str_c(release, collapse = " ")
+  Fr_text <- c(Fr_text,release)
+}
+
+return(Fr_text)
+}
+
+
+Fr <- Fr_TEXT()
+
+```
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S33"></a>
+
+### Testing the French text Result 
+
+
+
+```{r}
+number_of_actresses <- length(Fr)
+sample_of_Fr_text <-  Fr[2:4]
+
+cat("> the number of French actresses is : ", number_of_actresses, '\n','\n','\n') 
+
+cat("> Here is a sample of the French text : ",'\n',sample_of_Fr_text, fill = 2)
+```
+
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S4"></a>
+
+# Spanish Text 
+
+
+We are scrapping 700 tweets (total) from :
+
+* @realmadrid ( 200 tweets )
+* @FCBarcelona ( 200 tweets )
+* @LaLiga ( 100 tweets )
+* @PaulinaRubio ( 100 tweets )
+* @Armada_esp ( 100 tweets )
+
+![FC Barcelona](FCB.png)
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S42"></a>
+
+### Codes of Spanish  text 
+
+
+```{r}
+SPAN_TEXT <- function() {
+key <- "NR90Z1GOKWYNePoEwhX6SzTKL" 
+secret <- "8fmkbthBRwFvjdJPnHOrkxiYbdYsn7c1EtrG3xcy4Qlo7aulhv"
+accessToken <- "948925352-lbmVCizm3AFLxLa1NbNMyzk6xAOOK3Ryh1ZY88mF"
+accessSecret <- "4exQ4m58BjvcHw1xH2JNlbQsHGas1X9gmRpyPgMFILejp"
+options(httr_oauth_cache=TRUE)
+setup_twitter_oauth(key,secret, accessToken, accessSecret)
+
+Realmadridtweets_brut <- userTimeline("realmadrid", n = 250)
+Fcbtweets_brut <- userTimeline("FCBarcelona", n = 250)
+LaLiga_brut <- userTimeline("LaLiga", n = 150)
+PaulinaRubio_brut <- userTimeline("PaulinaRubio", n = 150)
+Armada_esp_brut <- userTimeline("Armada_esp", n = 150)
+
+df_1 <- tbl_df(map_df(Realmadridtweets_brut, as.data.frame))['text']
+df_2 <- tbl_df(map_df(Fcbtweets_brut, as.data.frame))['text']
+df_3 <- tbl_df(map_df(LaLiga_brut, as.data.frame))['text']
+df_4 <- tbl_df(map_df(PaulinaRubio_brut, as.data.frame))['text']
+df_5 <- tbl_df(map_df(Armada_esp_brut, as.data.frame))['text']
+
+
+my_data <- c(df_1$text[1:200],df_2$text[1:200],df_3$text[1:100],df_4$text[1:100],df_5$text[1:100])
+
+
+return(my_data)
+}
+
+Esp <- SPAN_TEXT()
+```
+
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+<a name="S43"></a>
+
+### Testing the Spanish text Result 
+```{r}
+
+number_of_tweets <- length(Esp)
+
+
+cat("> the total number of Tweets is : ", number_of_tweets, '\n','\n','\n') 
+
+
+cat("> Here is some Spanich Tweets  : ",'\n', Esp[1:20], fill = 2)
+
+
+```
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+
+<a name="S5"></a>
+
+# Italien Text 
+
+We are scrapping the Italien text from Giovannino Guareschi’s Tutto don Camillo (I racconti del Mondo piccolo) – Volume 1 di 5
+(PDF)  1 page per row.
+
+![Tutto don Camillo](tutto.png)
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S52"></a>
+
+### Codes of Italien  text 
+
+```{r}
+
+ITA_TEXT <- function() {
+
+download.file("http://www.flyemail.com/public/libri/1%20-%20Guareschi%20Giovannino%20-%20Tutto%20Don%20Camillo%20%20Volume.pdf", "./tutto.pdf")
+text <- pdf_text("./tutto.pdf")
+
+return(text)
+}
+
+ITA <- ITA_TEXT()
+```
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+<a name="S53"></a>
+
+### Testing the Italien text Result 
+```{r}
+
+
+
+number_of_pages <- length(ITA)
+
+
+cat("> the total number of pages in the book is : ", number_of_pages, '\n','\n','\n') 
+
+
+cat("> Here is some pages from the Italian text  : ",'\n', ITA[1:5], fill = 2)
+
+```
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+
+
+
+
+<a name="S6"></a>
+
+# German Text 
+
+
+We are scrapping 500   press releases from n-tv German free-to-air television news channel. The first step is to capture the URLs of all the required press releases and then download the press releases to a local folder in order extract the main text of each press release and save it to a string.
+
+<a href="#top">Back to top of notebook</a>
+
+
+<a name="S62"></a>
+
+### Codes of German  text 
+
+```{r}
+
+GER_TEXT <- function() {
+
+signatures = system.file("CurlSSL", cainfo = "cacert.pem", package = "RCurl")
+all_links_articles <- character()    # initialize
+link_page <- 'https://www.n-tv.de/thema/trends/archiv-0'
+while( length(all_links_articles) < 501  ){  
+   html_page <- getURL(link_page, cainfo = signatures) 
+  html_page_tree <- htmlParse(html_page)
+  links_of_articles = xpathSApply(html_page_tree, "//div/section/section/article/figure/a", xmlGetAttr, "href")
+  all_links_articles <- c(all_links_articles,links_of_articles)
+  link_page <- xpathSApply(html_page_tree,  "//div[@class= 'paging']//div//a[@class= 'paging__next1 icon icon__arrow'] ", xmlGetAttr,"href")
+}  
+
+# Download all press releases in a the Folder 'Press_Releases_Eng' that you need to create before. 
+dir.create("Press_Releases_german")
+for(i in 1:length(all_links_articles)){
+  url <- all_links_articles[i]
+  tmp <- getURL(url, cainfo = signatures)              # get the HTML at URL i
+  write(tmp, str_c("Press_Releases_german/", i, ".html"))     # write HTML to Press_Releases/i.html
+}  
+
+German_text <- character()   
+for(i in 1:length(list.files("Press_Releases_german")) ){
+  tmp <- readLines(str_c("Press_Releases_german/", i, ".html"))
+  tmp <- str_c(tmp, collapse = "")
+  tmp <- htmlParse(tmp)
+  release <- xpathSApply(tmp, "//div[@class='article__text']", xmlValue)
+  release <- str_c(release, collapse = " ")
+  German_text <- c(German_text,release)
+}
+  
+  
+
+return(German_text[1:500])
+}
+
+GER <- GER_TEXT()
+```
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+<a name="S63"></a>
+
+### Testing the German text Result 
+```{r}
+
+number_of_articles <- length(GER)
+sample_of_GER_text <-  GER[4] 
+
+
+cat("> the total number of articles is : ", number_of_articles, '\n','\n','\n') 
+
+
+cat("> Here is some samples from the German text : ", '\n','\n',sample_of_GER_text[[1]])
+
+
+```
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+<a name="S7"></a>
+
+# The Final dataset of 5 text corpora
+```{r}
+MAIN_DATASET <- function() {
+  
+Eng <- ENG_TEXT()
+Fr <- Fr_TEXT()
+Esp <- SPAN_TEXT()  
+ITA <- ITA_TEXT()
+GER <- GER_TEXT()
+
+
+x_1 <- data.frame("language_code" = "ENG", "text" = Eng[2:length(Eng)])
+x_2 <- data.frame("language_code" = "Fr", "text" = Fr)  
+x_3 <- data.frame("language_code" = "Esp", "text" = Esp)  
+x_4 <- data.frame("language_code" = "ITA", "text" = ITA)  
+x_5 <- data.frame("language_code" = "GER", "text" = GER)  
+
+
+df_3 <- rbind(x_1, x_2,x_3,x_5)
+
+write.csv(df_3, file = "Final_data_set.csv")
+
+df_4 <- df_3[sample(nrow(df_3)),]
+head(df_4,n=10)
+
+
+}
+  
+MAIN_DATASET()
+
+```
+
+
+
+
+######  reshuffling the data set 
+```{r}
+df_4 <- df_3[sample(nrow(df_3)),]
+head(df_4,n=10)
+```
+
+
+
+<a href="#top">Back to top of notebook</a>
+
+
+
+
+
+
+

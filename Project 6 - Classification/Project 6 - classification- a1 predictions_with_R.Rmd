@@ -1,0 +1,749 @@
+---
+title: "Classification"
+author: "Razieh Pourhasan and Soufiane Fadel"
+
+output:
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+# Objective
+
+The ability to monitor and perform early forecast of various river algae blooms is crucial to control the ecological harm they can cause. The objective of this document is to use *algae_blooms.csv* dataset to train several learning models in predicting the presence or absence of type a1 and a2 of algae blooms. The dataset consists of:
+
+  * the characteristics of the collection process for each sample (3 features: season, size, speed)
+  * chemical properties of various water samples of European rivers (8 features: mxPH, mnO2, Cl, NO3, NH4, oPO4, PO4, Chla).
+  * the quantity of seven algae in each of the samples, labeled as a1,..., a7, from which we choose a1 and a2.
+
+# Install and Load Packages
+
+The `pacman` package is used to install and load all necessary packages.
+```{r }
+# install.packages("pacman", verbose = F, quiet = T)
+pacman::p_load(VIM, mice, rpart, rpart.plot, readr, dplyr, ggplot2, GGally, corrplot, gridExtra, pROC, MASS, caTools, caret, caretEnsemble, doMC, rsample, earth, pdp, vip, nnet, gbm, party, randomForest, install = T)
+```
+
+# Importing the Data
+
+The data was downloaded from the course dataset folder and saved into a local folder. The csv file is loaded with the function `read.csv` in R and is stored into an R data frame `data`:
+```{r}
+data <- read.csv("/
+                 Datasets/algae_blooms.csv")
+head(data)
+```
+```{r}
+tail(data)
+```
+
+# Exploratory Data Analyisis
+
+Check the structure of the dataset with function `str`:
+```{r}
+str(data)
+```
+
+The dataset `algae_bloom` contains 340 observation of 18 variables:
+  
+  * 3 are categorical referring to the characteristics of the collection process for each sample: season, size, speed.
+  * of numerical variables 8 are associated with chemical properties of various water samples of European rivers: mxPH, mnO2, Cl, NO3, NH4, oPO4, PO4, Chla.
+  * the remaining 7 numerical features would refer to the quantity of seven algae in each of the samples, labeled as a1,..., a7, from which we choose a1 and a2.
+
+Print the summary statistics for all variables and check for missing (NA) values: 
+```{r}
+summary(data)
+```
+```{r }
+# Check number of NA values in each column
+colSums(is.na(data), na.rm = F)
+```
+
+There are missing values: 23 from `Chla`, 16 from `Cl`, 7 from `PO4` and so on. Before dealing with the missing values take a look at the barplot and histogram of categorical and numerical variables:
+```{r bar_plot, echo=FALSE}
+data[1:3] %>% 
+  gather(key = Variable, value = Value) %>% 
+  ggplot() +
+    geom_bar(aes(x = Value), fill = "blue") + 
+    facet_wrap(~Variable, scales='free') +
+    theme_bw() +
+    theme(aspect.ratio = 0.5, axis.title = element_blank(), panel.grid = element_blank())
+```
+```{r hist_plot, echo=FALSE, message=FALSE, warning=FALSE, cache=FALSE}
+data[4:13] %>% 
+  gather(key = Variable, value = Value) %>% 
+  ggplot() +
+    geom_histogram(aes(x = Value), bins = 12, fill = "blue") + 
+    facet_wrap(~Variable, scales='free') +
+    theme_bw() +
+    theme(aspect.ratio = 0.6, axis.title = element_blank(), panel.grid = element_blank())
+```
+
+
+## Looking at Missing Data Pattern
+
+Perhaps more helpful visual representation can be obtained by using the `aggr` function in `VIM` package as follows:
+```{r echo=FALSE }
+aggr_plot <- aggr(data, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(data), cex.axis=.7, gap=3, ylab=c("Histogram of missing data","Pattern"))
+```
+
+The above plot helps understanding that almost 90% of the samples are not missing any information, about 7% are missing the `chla`, 5% are missing`cl` value, and the remaining ones show other missing patterns. 
+
+## Imputing the Missing Data
+
+The function `mice` in package `mice` takes care of the imputing process:
+```{r, results="hide" , include=FALSE}
+tempData <- mice(data,m=5,maxit=50,meth='pmm',seed=500)
+```
+
+**Note:**
+ 
+  * m=5 refers to the number of imputed datasets. Five is the default value.
+  * meth='pmm' refers to the imputation method. In this case we are using predictive mean matching as imputation method. Other imputation methods can be used.
+ 
+Print the summary statistics of imputed data:
+```{r}
+summary(tempData)
+```
+
+Check the imputed data, for instance for the variable `Chla`:
+```{r}
+tempData$imp$Chla
+```
+which shows the imputed data for each observation within each imputed dataset.
+
+Check the imputation method used for each variable:
+```{r}
+tempData$meth
+```
+
+A useful visual take on the distributions can be obtained using the `stripplot` function that shows the distributions of the variables as individual points. The imputed data is shown in red (remember there were 5 imputed datasets) while the observed data is showed in blue. One would like to see that the red points (imputed) are within the spread of the blue ones (observed) implying that the imputed values are indeed “plausible values”:
+```{r}
+stripplot(tempData, pch = 20, cex = 1.2)
+```
+
+Get back the completed dataset using function `complete`:
+```{r}
+data <- mice::complete(tempData,1)
+```
+
+The missing values have been replaced with the imputed values in the first of the five datasets. Another one could be used by changing the second parameter in the `complete` function.
+
+
+## Correlation 
+
+Plot correlation map:
+```{r echo=FALSE}
+corr_mat <- cor(data[,4:ncol(data)])
+corrplot(corr_mat, order = "hclust", tl.cex = 1, addrect = 8)
+```
+
+There seems to be a considerable positive correlation between `PO4` and `oPO4`, therefore one of them could be dropped. Keep `oPO4`  because it has less missing values than `PO4`. Most pairwise correlations between predictors are generally low.
+
+Since the task of this project is to predict presence or absence of algae `a1` and `a2`, drop `a3` to `a7` from the data as well:
+```{r}
+old.data = data
+data = subset(data, select = -c(PO4, a3, a4, a5, a6, a7) )
+```
+
+Print summary of the updated data:
+```{r}
+summary(data)
+```
+
+## Visualizing Feature relationships with a scatterplot matrix
+
+Use a scatterplot matrix to understand the relationship between each predictor and the target feature, for example a1:
+
+```{r , echo=FALSE}
+ggduo(data, 
+      columnsX = 1:3, 
+      columnsY = 11, 
+      types = list(continuous = "smooth_lm"),
+      mapping = ggplot2::aes(color = -a1, alpha = .5) 
+      ) +
+  theme_bw()
+```
+```{r , echo=FALSE}
+ggduo(data, 
+      columnsX = 4:7, 
+      columnsY = 11, 
+      types = list(continuous = "smooth_lm"),
+      mapping = ggplot2::aes(color = -a1, alpha = 0.5) 
+      ) +
+  theme_bw()
+```
+```{r , echo=FALSE}
+ggduo(data, 
+      columnsX = 8:10, 
+      columnsY = 11, 
+      types = list(continuous = "smooth_lm"),
+      mapping = ggplot2::aes(color = -a1, alpha = 0.5) 
+      ) +
+  theme_bw()
+```
+
+# Modelling
+
+Since the task is predicting the presence or absence of a1 (or a2), first look at the barplot probability of a1 and a2 values:
+```{r }
+p.a1=prop.table(table(data$a1))
+p.a2=prop.table(table(data$a2))
+par(mfrow=c(1,2))
+barplot(p.a1,xlab='p(a1)')
+barplot(p.a2,xlab='p(a2)')
+```
+
+Now check the probability of presence (a1 or a2 equal to 0) and absence (a1 or a2 not equal to 0):
+```{r }
+p.a1=prop.table(table(data$a1==0))
+p.a2=prop.table(table(data$a2==0))
+cbind(p.a1,p.a2)
+```
+The probability of 0 for a1 or a2 is 0.18 and 0.36, respectively. The probability of presence and absence is unbalanced for both a1 and a2.
+
+# Modelling for a1
+
+For the purpose of classification, it is useful to convert a1 to a binary value (factor): 'yes' for the presence and 'no' for the absence. What is the threshold to have a balanced probability for the presence and absence of a1? After couple of trials, it turns out that a balanced probability is gained by setting the threshold to 7. From the summary statistics it is evident that a1 could be as high as 90. Therefore, it is not irrelevant to set the threshold to 7 to get a balanced probability which can be helpful in the process of training:
+```{r}
+data1 = NULL
+data1 = subset(data,select= -c(a2))
+t.a1 = 7
+data1$new.a1 = NA
+data1$new.a1[data1$a1>t.a1] = 'yes'
+data1$new.a1[data1$a1<t.a1 | data1$a1==t.a1] = 'no'
+data1 = subset( data1, select = -c(a1) )
+data1$new.a1 = as.factor(data1$new.a1)
+prop.table(table(data1$new.a1))
+```
+
+Print the summary statistics for new data `data1` after converting a1 to a binary factor value `new.a1`:
+```{r}
+summary(data1)
+```
+
+## Create Validation Set
+
+Remove 20% of the observations and save them into a validation set `val.set`. Stratified partitioning on the target feature will be applied for the creation of this set:  
+```{r }
+set.seed(1234)
+# Create validation set using stratified partioning (20% of observation)
+data.index <- createDataPartition(data1$new.a1, p=0.8, list = FALSE)
+new.data <- data1[data.index,]
+val.set <- data1[-data.index,]
+dim(data1)
+dim(new.data)
+dim(val.set)
+```
+
+It is important to preserve the probability of presence and absence of a1 in each set after partitioning:
+```{r}
+p.new.obs = prop.table(table(new.data$new.a1))
+p.val.set = prop.table(table(val.set$new.a1))
+cbind(p.new.obs, p.val.set)
+```
+
+## Create Training and Test Sets
+
+After saving 20% of original observations into a validation set, 80% of the samples (from the 80% remaining observations) are randomly selected for the training set, and the remaining 20% (of 80%) are allocated for testing the models. Stratified partitioning on the target feature will be applied for the creation of these subsets:
+```{r }
+set.seed(1234)
+data_index <- createDataPartition(new.data$new.a1, p=0.8, list = FALSE)
+train_data <- new.data[data_index,]
+test_data <- new.data[-data_index,]
+dim(new.data)
+dim(train_data)
+dim(test_data)
+```
+
+Again, it is important to check that the probability of presence and absence of a1 in each set is preserved after partitioning:
+```{r}
+p.train = prop.table(table(train_data$new.a1))
+p.test = prop.table(table(test_data$new.a1))
+cbind(p.train, p.test)
+```
+
+# Naive (Dummy) Classifier
+
+Classification models are fit on a training dataset and evaluated on a test dataset, and performance is often reported as a fraction of the number of correct predictions compared to the total number of predictions made, called accuracy.
+
+Given a classification model, how to know if the model has skill or not?
+
+When performing classification tasks using any ML model, it is very useful to determine how well the ML model performs against a naive (dummy) classifier model. A naive classifier model is one that does not use any sophistication in order to make a prediction, typically making a random or constant prediction. Such models are naive because they don’t use any knowledge about the domain or any learning in order to make a prediction. 
+
+The performance of a naive classifier on a classification task provides a lower bound on the expected performance of all other models on the problem. It is essential that our ML model does much better that the naive classifier. 
+
+What classifier should be used as the naive classifier?
+
+Some common choices include:
+ 
+  * Predict a random class.
+  * Predict a randomly selected class from the training dataset.
+  * Predict the majority class from the training dataset.
+ 
+For a two-class classification problem such as the one in this project, a naive classifier could be some simple computation like frequency of majority class. For example, in an imbalanced class where there are only about 10% of positive samples, if any ML model has an accuracy of about 0.90 then it is evident that the ML classifier is not doing any better than a naive classifier which can just take a majority count of this imbalanced class and also come up with 0.90. The ML classifier needs to be able to do better than that.
+
+R does not seem to have an explicit naive classifier but the following simple code creates a naive classifier that predicts the majority class: 
+```{r}
+# Create a simple dummy (naive) classifier that computes the ratio of the majority class to the total in the training set
+DummyClassifierAccuracy <- function(train,target,type="majority"){
+  if(type=="majority"){
+      count <- sum(ifelse(train[target]=='yes',1,0))/dim(train)[1]
+  }
+  count
+}
+```
+
+Therefore we get a lower bound for accuracy as:
+```{r }
+acc=DummyClassifierAccuracy(train_data, target='new.a1')
+paste("The baseline accuracy for predicting the presence or absence of algae bloom a1 is",acc)
+```
+
+
+# AppLying Machine Learning Models
+
+## Training Parameters
+
+Parameter tuning will be done using repeated 5-fold cross-validation. Each round of cross-validation will be repeated 3 times. 
+The `caret` package will be used for model training, tuning and evaluation.
+```{r }
+# Training Parameters
+CV_folds <- 5 # number of folds
+CV_repeats <- 3 # number of repeats 
+
+# Training Settings
+set.seed(1)
+
+# trainControl object for standard repeated cross-validation
+fitControl <- trainControl(method="repeatedcv",
+                           number = CV_folds,
+                           repeats = CV_repeats,
+                           savePredictions = 'final', 
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+
+```
+
+
+## Model Fitting, Prediction and Confusion Matrix:
+```{r model_fit, message=FALSE, warning=FALSE, cache=FALSE}
+# list of algorithms
+model_list = c('rpart', 'nb', 'nnet', 'glm', 'svmLinear') 
+#model_list = c('ctree', 'rf', 'lda', 'knn', 'nb', 'earth') # switch to this list for part 7 of project and run
+
+# create model_fit function
+model_fit <- function(mod, fit_data){
+  if (mod != 'nnet')
+    train(new.a1~., fit_data, method = mod, metric = "ROC", 
+          preProcess = c('center', 'scale'), tuneLength = 10, trControl = fitControl)
+  else train(new.a1~., fit_data, method = mod, metric = "ROC", trace = FALSE,
+        preProcess = c('center', 'scale'), tuneLength = 10, trControl = fitControl)
+}
+
+# create empty lists to save trained models, preditions and confusion matrices
+models20 <- list()
+preds20 <- list()
+cms20 <- list()
+
+# repeat model fitting for each of 5 models 20 times; each time for a new set of train/test data and save each trial
+for (i in 1:20){
+  data_index <- createDataPartition(new.data$new.a1, p=0.8, list = FALSE)
+  train_data <- new.data[data_index,]
+  test_data <- new.data[-data_index,]
+  model.fits <- lapply(model_list, model_fit, train_data) # fit each model in the list to the train data
+  models20 <- append(models20, list(model.fits)) #save trained models
+  names(models20)[i] <- paste0("model.fits",i) 
+  preds <- lapply(model.fits, predict, test_data) # make predictions for the test data
+  preds20 <- append(preds20, list(preds)) # save preditions 
+  names(preds20)[i] <- paste0("preds",i) 
+  cms <- lapply(preds, confusionMatrix, test_data$new.a1, positive = "yes") # compute CMs
+  cms20 <- append(cms20, list(cms)) # save CMs
+  names(cms20)[i] <- paste0("cms",i)
+  }
+
+# check one of the 20 trials
+models20[[2]]
+cms20[[2]]
+```
+
+## Model Result Comparison
+
+Comparing the overall (regular) `Accuracy` of each model for each of 20 trial: 
+```{r}
+df_Accuracy20 = setNames(data.frame(matrix(ncol = 5, nrow = 0)),
+                         c(' Decision Tree ',' Naive Bayes ',
+                           ' Neural Network ',' Logistic ',' SVM.Linear '))
+for (i in 1:20){
+  df_Accuracy20[nrow(df_Accuracy20) + 1,] <- sapply(cms20[[i]], function(x) x$overall['Accuracy'])
+}
+df_Accuracy20
+```
+
+The average of overall (regular) `Accuracy` for each model is:
+```{r }
+Ave.OverallAcurracy = colMeans(df_Accuracy20, na.rm = TRUE)
+Ave.OverallAcurracy
+```
+
+Comparing the `Sensitivity` of each model for each of 20 trial: 
+```{r}
+df_Sensitivity20 = setNames(data.frame(matrix(ncol = 5, nrow = 0)),
+                         c(' Decision Tree ',' Naive Bayes ',
+                           ' Neural Network ',' Logistic ',' SVM.Linear '))
+for (i in 1:20){
+  df_Sensitivity20[nrow(df_Sensitivity20) + 1,] <- sapply(cms20[[i]], function(x) x$byClass['Sensitivity'])
+}
+df_Sensitivity20
+```
+
+The average `Sensitivity` for each model is:
+```{r }
+Ave.Sensitivity = colMeans(df_Sensitivity20, na.rm = TRUE)
+Ave.Sensitivity
+```
+
+Similarly, other metrics in the confusion matrix can be compared for each model in each trial. Their average for each model can be computed with `Average_Parameters` function which is defined as follows: 
+```{r}
+Average_Parameters <- function(parameter){
+  df <- setNames(data.frame(matrix(ncol = 5, nrow = 0)),
+                         c(' Decision Tree ',' Naive Bayes ',
+                           ' Neural Network ',' Logistic ',' SVM.Linear '))
+  if (parameter!='Accuracy')
+    for (i in 1:20) df[nrow(df) + 1,] <- sapply(cms20[[i]], function(x) x$byClass[parameter])
+  else 
+    for (i in 1:20) df[nrow(df) + 1,] <- sapply(cms20[[i]], function(x) x$overall[parameter])
+  Ave_Parameter <- colMeans(df, na.rm = TRUE)
+  return(Ave_Parameter)
+}
+```
+
+Compare the average of each metric in Confusion Matrix across different models:
+```{r}
+parameter_list =list(Sensitivity='Sensitivity', Specificity='Specificity', Pos_Pred_Value='Pos Pred Value', Neg_Pred_Value='Neg Pred Value', Precision='Precision', Recall='Recall', F1='F1', Prevalence='Prevalence', Detection_Rate='Detection Rate', Detection_Prevalence='Detection Prevalence', Balanced_Accuracy='Balanced Accuracy', Overall_Accuracy='Accuracy')
+
+cm_avepar_results <- sapply(parameter_list, Average_Parameters)
+cm_list_results <- t(cm_avepar_results)
+cm_list_results
+```
+
+Extract the best model for each metric:
+```{r}
+cm_results_max <- apply(cm_list_results, 1, which.is.max)
+output_report <- data.frame(metric=names(cm_results_max), 
+                            best_model=colnames(cm_list_results)[cm_results_max],
+                            value=mapply(function(x,y) {cm_list_results[x,y]}, 
+                            names(cm_results_max), 
+                            cm_results_max))
+rownames(output_report) <- NULL
+output_report
+```
+
+**NOTES:**
+
+  * The `Prevalence` is equal to 0.5 across all models and it should be so, since all samples are balanced for *new.a1* and therefore the proportion of positives/total(=prevalence) is always 0.5. 
+  * The `Sensitivity` and `Recall` are equal since they are essentially the same by definition: they show how many relevant samples are selected, which means how well a model can predict all the interested samples in a dataset.
+  * There are two measures for `Accuracy`: *Overall* and *Balanced*. Here both the overall and balanced calculations produce the same accuracy, as will always happen when the test set is balanced; have the same number of examples in each class. However, if the test set is not balanced, *Balanced* accuracy is probably better than *Overall*.
+  * Which metric to use in selecting the best model for predicting the test set? It is recommended to use `Accuracy` (overall or balanced) only if the classes are perfectly balanced, and otherwise use `F1`. It is also useful to see ratio of positives and negatives estimation via `Precision` and `Sensitivity` (or `Recall`).
+  
+# Ensemble Modelling 1
+
+Use function `caretList` to fit different caret models, with the same resampling parameters, to the same dataset (here `new.data` which was the original 80% of the whole dataset). `caretList` returns a list of caret objects which can later be passed to `caretEnsemble` and `caretStack` for ensemble modelling:
+```{r caretlist, include=FALSE, message=FALSE, warning=FALSE, cache=FALSE}
+# include index in train control for better performance of caretList
+fit_control <- trainControl(
+  method="repeatedcv",
+  number=10,
+  repeats=3,
+  savePredictions="final",
+  classProbs=TRUE,
+  index=createResample(new.data$new.a1, 10),
+  summaryFunction=twoClassSummary
+  )
+# fit all 5 models to the new.data using caretList
+model_list <- caretList(
+  new.a1~., new.data,
+  trControl=fit_control,
+  metric='ROC',
+  methodList=c('rpart', 'nb', 'nnet', 'glm', 'svmLinear') 
+  #methodList=c('ctree', 'rf', 'lda', 'knn', 'nb', 'earth') # switch to this list for part 7 of project and run
+  )
+```
+
+## Correlation between models:
+
+Compare the models and check their correlation:
+```{r }
+resamples <- resamples(model_list)
+model_cor <- modelCor(resamples)
+corrplot(model_cor)
+```
+```{r}
+model_cor
+```
+Good candidates for ensemble modelling should be models with fairly low correlation, ideally un-correlated; That is, each model should capture a different aspect of the data, and different models perform best on different subsets of the data. Out of 5 models chosen in this example glm and svmLinear together are not good for ensemble since they are highly correlated, i.e. combining them together won't improve the prediction.   
+
+## Comparison
+```{r}
+bwplot(resamples, metric="ROC")
+```
+
+
+## Ensemble modelling using caretEnsemble
+
+Create a simple linear combination of models with `caretEnsemble` function:
+```{r , message=FALSE, warning=FALSE, cache=FALSE} 
+greedy_ensemble <- caretEnsemble(
+  model_list, 
+  metric="ROC",
+  trControl=trainControl(
+    number=2,
+    summaryFunction=twoClassSummary,
+    classProbs=TRUE
+    ))
+summary(greedy_ensemble)
+```
+
+The ensemble's ROC on the `new.data` resamples is slightly better than the best individual model. A simple linear ensemble doesn't make a significant improvement. Confirm this on the validation set:
+```{r, message=FALSE, warning=FALSE, cache=FALSE} 
+model_preds <- lapply(model_list, predict, newdata=val.set, type="prob")
+model_preds <- lapply(model_preds, function(x) x[,"yes"])
+model_preds <- data.frame(model_preds)
+ens_preds <- predict(greedy_ensemble, newdata=val.set, type="prob")
+model_preds$ensemble <- ens_preds
+caTools::colAUC(model_preds, val.set$new.a1)
+```
+
+Use `varImp` function to extract the importance of variables from each member of the ensemble, as well as the final ensemble model:
+```{r}
+varImp(greedy_ensemble)
+```
+
+Note that each column sums up to 100:
+```{r}
+colSums(varImp(greedy_ensemble))
+```
+
+## Ensemble modelling using caretStack
+
+Function `caretStack` uses “meta-models” to ensemble collections of predictive models:
+```{r, message=FALSE, warning=FALSE, cache=FALSE} 
+glm_ensemble <- caretStack(
+  model_list,
+  method="glm",
+  metric="ROC",
+  trControl=trainControl(
+    method="boot",
+    number=10,
+    savePredictions="final",
+    classProbs=TRUE,
+    summaryFunction=twoClassSummary
+  )
+)
+model_preds2 <- model_preds
+model_preds2$ensemble <- predict(glm_ensemble, newdata=val.set, type="prob")
+CF <- coef(glm_ensemble$ens_model$finalModel)[-1]
+colAUC(model_preds2, val.set$new.a1)
+```
+Comparing with the caretEnsemble greedy optimization, the result is extremely similar. Again, the ensemble modelling does not make an improvement. 
+
+Let's try another one, a non-linear ensemble:
+```{r , message=FALSE, warning=FALSE, cache=FALSE}
+gbm_ensemble <- caretStack(
+  model_list,
+  method="gbm",
+  verbose=FALSE,
+  tuneLength=10,
+  metric="ROC",
+  trControl=trainControl(
+    method="boot",
+    number=10,
+    savePredictions="final",
+    classProbs=TRUE,
+    summaryFunction=twoClassSummary
+  )
+)
+model_preds3 <- model_preds
+model_preds3$ensemble <- predict(gbm_ensemble, newdata=val.set, type="prob")
+colAUC(model_preds3, val.set$new.a1)
+```
+
+There is a little improvement but not significant. It is expected that ensemble model doesn't make a significant improvement since the the models are fairly correlated.  
+
+
+
+
+
+# Ensemble Modeling 2
+
+First we need to establish a baseline by which we will be able to judge the improvement of our ensemble model. For this task, we will use a `SVM` model:
+```{r}
+# Set-up parallel processing to take advantage of multiple machine cores
+library(parallel)
+library(doMC)
+library(e1071)
+
+numCores <- detectCores()
+registerDoMC(cores = numCores)
+
+# Function to compute classification error
+classification_error <- function(conf_mat) {
+  conf_mat = as.matrix(conf_mat)
+  
+  error = 1 - sum(diag(conf_mat)) / sum(conf_mat)
+  
+  return (error)
+}
+
+# Splitting data into train and test
+data_index <- createDataPartition(new.data$new.a1, p=0.8, list = FALSE)
+train_data <- new.data[data_index,]
+test_data <- new.data[-data_index,]
+
+# Model
+svm_model <- svm(new.a1 ~ . , data = train_data, kernel = "linear")
+
+# Perform predictions on the validation set (20% of the original data)
+svm_pred <- as.factor(predict(svm_model, val.set))
+
+svm_conf_mat <- table(true = val.set$new.a1, pred = svm_pred)
+
+# Results 
+print(svm_model)
+
+```
+
+```{r, echo=FALSE}
+cat("\n", "SVM Classification Error Rate, Validation:", classification_error(svm_conf_mat), "\n")
+```
+
+Hence, we have a baseline. The classification error rate of the simple SVM is the metric we will use to judge the outcome of our ensemble model with. Hopefully, we will get an improvement using the `caretEnsemble` technique.
+
+## caretList
+
+We are now using the `caretList` function to conduct training on a set of algorithms all simultaneously without having to manually call each one: 
+```{r, message=FALSE, warning=FALSE}
+# Load the required libraries
+library(caret)
+library(nnet)
+library(e1071)
+library(caretEnsemble)
+
+# Model to predict a1 
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 3, 
+                        search = "grid", savePredictions = "final", index=createResample(train_data$new.a1, 10), 
+                        summaryFunction = twoClassSummary, classProbs = TRUE, verboseIter = TRUE)
+
+# List of algorithms to use in ensemble
+alg_list <- c("rpart", "glm", "nb",  "nnet", "svmLinear")
+#alg_list <- c('ctree', 'rf', 'lda', 'knn', 'nb', 'earth') # switch to this list for part 7 of project and run 
+
+multi_mod <- caretList(new.a1 ~ . , data = train_data, trControl = control, methodList = alg_list, metric = "ROC")
+
+# Results
+res <- resamples(multi_mod)
+summary(res)
+```
+
+## caretStack
+
+The next step to aggregate the results of `caretList` using `caretStack`. This approach uses a SVM algorithm to aggregate the results of the models we created previously:
+```{r, warning=FALSE, message=FALSE, include=FALSE}
+# Stack 
+stackControl <- trainControl(method = "repeatedcv", number = 10, repeats = 3, savePredictions = TRUE, classProbs = TRUE, verboseIter = TRUE)
+
+stack <- caretStack(multi_mod, method = "svmLinear", metric = "Accuracy", trControl = stackControl)
+
+# Predict
+stack_val_preds <- data.frame(predict(stack, val.set, type = "prob"))
+stack_test_preds <- data.frame(predict(stack, test_data, type = "prob"))
+```
+
+The output is a list of probabilities for each class determined by the combined results of all of the different models in the list. In order to choose final class outcomes, we should find a threshold value for the probabilities:
+```{r}
+# Function to find threshold
+
+# Values
+thresholds <- seq(0, 1, .05)
+num_thresh <- length(thresholds)
+
+# Empty list to store results
+errors <- rep(0, num_thresh)
+
+iter <- 1
+
+for (i in thresholds) {
+
+  cat("Calculating error for threshold value-", i, "\n")
+  
+  threshold_value <- i
+  
+  val_a1_pred <- ifelse(stack_val_preds > threshold_value, "yes", "no")
+  
+  conf_mat <- table(true = val.set$new.a1, pred = val_a1_pred)
+  
+  errors[iter]<- classification_error(conf_mat) 
+  
+  iter <- iter + 1
+}
+```
+
+```{r}
+# Compute final threshold value
+result <- data.table(cbind(thresholds, errors))
+
+final_value <- result[which(result$error == min(result$errors))]
+
+val_a1_pred <- ifelse(stack_val_preds >= final_value$thresholds, 1, 0)
+
+# Report error rate
+phase1_conf <- table(true = val.set$new.a1, pred = val_a1_pred)
+
+cat("Classification Error for a1 Predictions:", classification_error(phase1_conf), "\n")
+```
+
+Now that we have created our “a1” predictions for the data, we can re-run our original model to see if the ensemble has been able to improve our classification rate.
+```{r}
+# Include predictions as part of model
+val.set$new.a1 <- as.factor(val_a1_pred)
+
+# Model
+svm_final<- svm(new.a1 ~ ., data = train_data, kernel='linear')
+
+# Predictions
+svm_val_pred <- predict(svm_final, val.set)
+
+# Results
+svm_conf_mat <- table(true = val.set$new.a1, pred = svm_val_pred)
+
+print(svm_final)
+```
+
+```{r}
+cat("\n", "SVM Classification Error, Validation:", classification_error(svm_conf_mat), "\n")
+```
+
+# Closing Remarks
+
+* In this document we trained several ML models for classification of algae bloom a1 (binary or two classes). We used `train` function to train each model separately on training set while we set metric equal to `ROC`. There are several other evaluation metrics in `caret` package that can be used in `train` function including: 
+
+    + **Accuracy** and **Kappa** are the default metrics which are used to evaluate algorithms on binary and multi-class classification datasets in `caret`. **Accuracy** is the percentage of correctly classifies instances out of all instances. It works best on a binary classification than multi-class classification problems because it can be less clear exactly how the accuracy breaks down across those classes. While **Kappa** is like classification accuracy, except that it is normalized at the baseline of random chance on the dataset. It is a more useful measure to use on problems that have an imbalance in the classes. 
+  
+    + **RMSE and R^2** are the default metrics used to evaluate algorithms on regression datasets in `caret`. **RMSE** is the average deviation of the predictions from the observations. It is useful to get a gross idea of how well (or not) an algorithm is doing, in the units of the output variable. While **R^2** provides a “goodness of fit” measure for the predictions to the observations. This is a value between 0 and 1 for no-fit and perfect fit respectively.
+  
+    + **ROC** metrics are only suitable for binary classification problems (e.g. two classes). It is actually the area under the ROC curve or AUC. The AUC represents a models ability to discriminate between positive and negative classes. An area of 1.0 represents a model that made all predicts perfectly. An area of 0.5 represents a model as good as random. ROC can be broken down into sensitivity and specificity. A binary classification problem is really a trade-off between sensitivity and specificity. That's why we used in our classification problem in this example. 
+  
+    + **LogLoss** or Logarithmic Loss is used to evaluate binary classification but it is more common for multi-class classification algorithms. Specifically, it evaluates the probabilities estimated by the algorithms.
+  
+* To build our classification model we split a1 to two classes (presence or absence), an alternative could be splitting a1 into more than two classes (3 or more). If we do so, according to the previous remark we need to use a proper metric rather than 'ROC', for example 'LogLoss' could be a suitable metric in that case. Moreover, we split a1 such that the probability of two classes were balanced, again in this case 'ROC' is a proper metric. However, if we use a different threshold so that the two classes are not balanced 'ROC' is not the best metric to use rather we could use 'Kappa'. 
+
+* For ensemble modelling we used `caretEnsemble` and/or `careStack`, there are other packages that could be used for this purpose, for example `SuperLearner` package. We can even customize our own layered learner and combine the ML algorithm in many different ways. In fact, here we tried two approaches in sections *Ensemble Modelling 1* and *Ensemble Modelling 2* but we are not satisfied by any of them. Thus, it is still an ongoing work to build a strong ensemble. 
+
+* For the part 7 of the project, we choose algorithms ('ctree', 'rf', 'lda', 'knn', 'nb', 'earth') and we switch to this list of algorithms that is provided in the corresponding code chunk beside the original list of algorithms and run the whole file. 
+  
